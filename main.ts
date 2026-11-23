@@ -7,7 +7,7 @@
 // In a trial the grader runs `node /bot/main.ts` with MAKEFUN_ENV_URL set, and then this file hands over to
 // runner.ts (the last lines below): keep that hand-over and runner.ts as they are, and write the CLI.
 
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const FORMATS = ['auto', 'unified', 'search-replace', 'v4a', 'json'];
@@ -101,6 +101,31 @@ class Tree {
   }
   get(p: string): string | null {
     return this.now.has(p) ? this.now.get(p)! : this.original(p);
+  }
+  /** True when the path exists on disk at all, as a file or as a directory. */
+  private readonly diskExistsCache = new Map<string, boolean>();
+  diskExists(p: string): boolean {
+    if (!this.diskExistsCache.has(p)) {
+      let v = false;
+      try {
+        v = existsSync(p);
+      } catch {
+        v = false;
+      }
+      this.diskExistsCache.set(p, v);
+    }
+    return this.diskExistsCache.get(p)!;
+  }
+  /**
+   * True when the path exists in the tree as the edits leave it: a file the
+   * tree holds (in memory, or on disk), or a directory on disk the edits
+   * have not touched. A directory is not a file, so changing, deleting or
+   * moving it is `missing`; but it is a path that exists, so creating a
+   * file at it, or moving a file onto it, is `exists`.
+   */
+  present(p: string): boolean {
+    if (this.now.has(p)) return this.now.get(p) !== null;
+    return this.original(p) !== null || this.diskExists(p);
   }
 }
 
@@ -235,7 +260,7 @@ function jsonEdit(v: unknown): Edit | null {
     const text = o.file_text;
     return (tree) => {
       if (!safe(p)) throw new Fail('unsafe', p);
-      if (tree.get(p) !== null) throw new Fail('exists', p);
+      if (tree.present(p)) throw new Fail('exists', p);
       tree.now.set(p, text);
     };
   }
@@ -552,8 +577,9 @@ function unifiedSectionEdit(sec: USection, strict: boolean): Edit {
   if (isCreate) {
     const p = newP!;
     return (tree) => {
+      if (oldP !== undefined && oldP !== '/dev/null' && !safe(oldP)) throw new Fail('unsafe', oldP);
       if (!safe(p)) throw new Fail('unsafe', p);
-      if (tree.get(p) !== null) throw new Fail('exists', p);
+      if (tree.present(p)) throw new Fail('exists', p);
       const made: string[] = [];
       let noEol = false;
       for (const h of sec.hunks) {
@@ -574,6 +600,7 @@ function unifiedSectionEdit(sec: USection, strict: boolean): Edit {
     const p = oldP!;
     return (tree) => {
       if (!safe(p)) throw new Fail('unsafe', p);
+      if (newP !== undefined && newP !== '/dev/null' && !safe(newP)) throw new Fail('unsafe', newP);
       if (tree.get(p) === null) throw new Fail('missing', p);
       tree.now.set(p, null);
     };
@@ -586,7 +613,7 @@ function unifiedSectionEdit(sec: USection, strict: boolean): Edit {
       if (!safe(to)) throw new Fail('unsafe', to);
       const text = tree.get(from);
       if (text === null) throw new Fail('missing', from);
-      if (tree.get(to) !== null) throw new Fail('exists', to);
+      if (tree.present(to)) throw new Fail('exists', to);
       const { lines, br, final } = splitFile(text);
       const out = applyHunks(lines, final, sec.hunks, strict, from);
       tree.now.set(to, joinFile(out.lines, br, out.final));
@@ -671,7 +698,7 @@ function srBlockEdit(b: SRBlock, strict: boolean): Edit {
     const p = b.path;
     if (!safe(p)) throw new Fail('unsafe', p);
     if (b.old.length === 0) {
-      if (tree.get(p) !== null) throw new Fail('exists', p);
+      if (tree.present(p)) throw new Fail('exists', p);
       tree.now.set(p, b.nw.length === 0 ? '' : b.nw.join('\n') + '\n');
       return;
     }
@@ -758,7 +785,7 @@ function v4aEdits(lines: string[], strict: boolean): Edit[] {
       }
       edits.push((tree) => {
         if (!safe(path)) throw new Fail('unsafe', path);
-        if (tree.get(path) !== null) throw new Fail('exists', path);
+        if (tree.present(path)) throw new Fail('exists', path);
         tree.now.set(path, made.length === 0 ? '' : made.join('\n') + '\n');
       });
     } else if (kind === 'delete') {
@@ -811,11 +838,11 @@ function v4aEdits(lines: string[], strict: boolean): Edit[] {
 function v4aUpdateEdit(path: string, moveTo: string | null, chunks: VChunk[], strict: boolean): Edit {
   return (tree) => {
     if (!safe(path)) throw new Fail('unsafe', path);
+    if (moveTo !== null && !safe(moveTo)) throw new Fail('unsafe', moveTo);
     const text = tree.get(path);
     if (text === null) throw new Fail('missing', path);
     if (moveTo !== null) {
-      if (!safe(moveTo)) throw new Fail('unsafe', moveTo);
-      if (tree.get(moveTo) !== null) throw new Fail('exists', moveTo);
+      if (tree.present(moveTo)) throw new Fail('exists', moveTo);
     }
     const { lines, br, final } = splitFile(text);
     let cur = lines;
