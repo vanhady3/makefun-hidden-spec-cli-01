@@ -84,4 +84,9 @@
   `error: parse <its line>`; a duplicate `+++` retargets (last wins); an impossible
   final tree (create a/b while a stays a file) fails cleanly with nothing written.
 - Re-verified after the fix: practice 100/100 (1000); probe 166/166 pass, 0 failed.
+- Round-1 regression re-check (harness wiped with /tmp; 5 cases reconstructed from the
+  round-1 record, /tmp/adv-probe2/regress-r1.ts): ALL 5 PASS — unified create unsafe old
+  path blocked, unified delete unsafe new path blocked, V4A move unsafe-beats-missing,
+  V4A move-to-is-dir `error: exists`, unified create-is-dir `error: exists`, no file
+  changes in any blocked case. No round-1 fix regressed.
 - Probe harness: /tmp/adv-probe2/probe.ts (173 cases, expectations hand-derived from SPEC.md).
