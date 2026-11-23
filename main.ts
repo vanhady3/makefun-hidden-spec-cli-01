@@ -954,15 +954,42 @@ function run(args: string[]): { code: number; out: string[] } {
   }
   rows.sort((a, b) => byteCmp(a.key, b.key));
   if (!check) {
-    for (const p of [...tree.now.keys()]) {
-      const was = tree.original(p);
-      const now = tree.now.get(p)!;
-      if (was === now) continue;
-      if (now === null) rmSync(p, { force: true });
-      else {
-        mkdirSync(dirname(p), { recursive: true });
-        writeFileSync(p, now);
+    // Write in two passes: deletions first, then creations and changes. A path
+    // the patch deletes may be the parent of a path it creates (or a move's
+    // target may sit under its own source); creating the child before the
+    // parent file is gone throws on the live file, although the final tree the
+    // patch describes is perfectly writable (section 10: when none failed,
+    // every change is written).
+    const changed = [...tree.now.keys()].filter((p) => tree.now.get(p) !== tree.original(p));
+    // A write whose ancestor stays a file in the final tree cannot be written
+    // at all. Fail the run cleanly, with nothing written, instead of crashing
+    // halfway through the writes and leaving a half-written tree.
+    const blocked = changed.some((p) => {
+      if (tree.now.get(p) === null) return false;
+      const parts = p.split('/');
+      for (let k = 1; k < parts.length; k += 1) {
+        const anc = parts.slice(0, k).join('/');
+        if (tree.now.has(anc)) {
+          if (tree.now.get(anc) !== null) return true;
+        } else {
+          try {
+            if (statSync(anc).isFile()) return true;
+          } catch {
+            // Ancestor does not exist: it will be created as a directory.
+          }
+        }
       }
+      return false;
+    });
+    if (blocked) return { code: 1, out: [] };
+    for (const p of changed) {
+      if (tree.now.get(p) === null) rmSync(p, { force: true });
+    }
+    for (const p of changed) {
+      const now = tree.now.get(p)!;
+      if (now === null) continue;
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, now);
     }
   }
   const out = rows.map((r) => r.text);

@@ -62,3 +62,26 @@
   move-from on a directory path still correctly report `missing`.
 - Re-verified after the fixes: practice 100/100 (1000); adversarial harness
   233/237 pass, 0 failed, 4 observe-only (SPEC-silent cases, unchanged).
+
+## Round-2 adversarial probe 24 Nov 2026 (resubmission 3)
+- Probe: 173 NEW SPEC-derived cases (round 1's 237 not repeated), fresh angles: write-phase
+  parent/file conflicts, JSON tool-call edges (overlapping str_replace, CRLF conversion,
+  insert bounds, array/JSONL faults), V4A cursor/EOF corners, unified `\` and drift edges,
+  CRLF/mixed endings, empty-file edges, unicode/sorting, CLI invocation, atomicity.
+- Result: 166 pass, 0 failed, 7 observe-only (SPEC-silent, unchanged).
+- 1 REAL gap, 1 root cause — write phase (§10): the write loop iterated `tree.now`
+  keys in insertion order, so a child was written before its parent file was deleted
+  and `mkdirSync` threw (uncaught crash, exit 1, empty stdout, partial writes).
+  Cases: create a/b then delete a; V4A move a -> a/b; create a/b/c then delete a/b;
+  V4A move a/b -> a/b/c. All four are representable final trees, so §10 implies exit 0.
+- Fix (fresh writing, main.ts run() write phase only): deletions first, then creations/
+  changes; pre-validate writes whose ancestor stays a file in the final tree and fail
+  the run cleanly (exit 1, empty stdout, nothing written) instead of crashing mid-write.
+- V4A move-to-self resolved as CORRECT, not a gap: `error: exists f` (§8: the new path
+  exists, so the edit fails with `exists`).
+- Observe-only, SPEC-silent, unchanged: negative A+d insert clamps to 0; a `\` line as
+  the first hunk body line is ignored; a malformed `@@` in a deletion section is
+  `error: parse <its line>`; a duplicate `+++` retargets (last wins); an impossible
+  final tree (create a/b while a stays a file) fails cleanly with nothing written.
+- Re-verified after the fix: practice 100/100 (1000); probe 166/166 pass, 0 failed.
+- Probe harness: /tmp/adv-probe2/probe.ts (173 cases, expectations hand-derived from SPEC.md).
